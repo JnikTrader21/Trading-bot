@@ -13,18 +13,20 @@ const CAPITAL_PASSWORD = process.env.CAPITAL_PASSWORD;
 const CAPITAL_BASE_URL =
   process.env.CAPITAL_BASE_URL || "https://demo-api-capital.backend-capital.com";
 
-// IMPORTANTE:
-// EPIC = identificador del mercado en Capital.com
-// Ejemplos reales dependen del instrumento exacto de tu cuenta/demo.
-// Lo pondremos como variable para cambiarlo sin tocar código.
 const DEFAULT_EPIC = process.env.CAPITAL_EPIC;
 const DEFAULT_CURRENCY = process.env.CAPITAL_CURRENCY || "USD";
 const DEFAULT_SIZE = Number(process.env.DEFAULT_SIZE || 1);
+const CAPITAL_ACCOUNT_ID = process.env.CAPITAL_ACCOUNT_ID || "";
 
 // Ruta simple para verificar que el server está vivo
 app.get("/", (req, res) => {
   res.send("Bot activo");
 });
+
+// Pausa pequeña para pruebas
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Login a Capital.com
 async function capitalLogin() {
@@ -47,16 +49,35 @@ async function capitalLogin() {
   const cst = response.headers["cst"];
   const securityToken = response.headers["x-security-token"];
 
+  console.log("LOGIN DATA:");
+  console.log(JSON.stringify(response.data));
+
   if (!cst || !securityToken) {
     throw new Error("No se obtuvieron CST o X-SECURITY-TOKEN");
   }
 
-  return { cst, securityToken };
+  return {
+    cst,
+    securityToken,
+    loginData: response.data
+  };
 }
 
 // Crear orden de mercado
 async function createMarketOrder({ direction, epic, size }) {
-  const { cst, securityToken } = await capitalLogin();
+  const { cst, securityToken, loginData } = await capitalLogin();
+
+  const accountId =
+    CAPITAL_ACCOUNT_ID ||
+    loginData?.currentAccountId ||
+    loginData?.accountId ||
+    loginData?.accounts?.[0]?.accountId;
+
+  if (!accountId) {
+    throw new Error("No se encontró accountId de la cuenta demo");
+  }
+
+  console.log("ACCOUNT ID USADO:", accountId);
 
   const url = `${CAPITAL_BASE_URL}/api/v1/positions`;
 
@@ -75,6 +96,7 @@ async function createMarketOrder({ direction, epic, size }) {
       "X-CAP-API-KEY": CAPITAL_API_KEY,
       "CST": cst,
       "X-SECURITY-TOKEN": securityToken,
+      "X-ACCOUNT-ID": accountId,
       "Content-Type": "application/json"
     }
   });
@@ -96,6 +118,10 @@ app.post("/webhook", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Falta action" });
     }
 
+    if (!symbol) {
+      return res.status(400).json({ ok: false, error: "Falta symbol o CAPITAL_EPIC" });
+    }
+
     let direction;
     if (actionRaw === "buy") {
       direction = "BUY";
@@ -104,6 +130,9 @@ app.post("/webhook", async (req, res) => {
     } else {
       return res.status(400).json({ ok: false, error: "action debe ser buy o sell" });
     }
+
+    // Pequeña pausa para evitar choques en pruebas
+    await sleep(1500);
 
     const result = await createMarketOrder({
       direction,
