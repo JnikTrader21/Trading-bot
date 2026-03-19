@@ -20,55 +20,91 @@ app.get("/", (req, res) => {
   res.send("Bot activo");
 });
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function redact(value) {
+  if (!value) return value;
+  const str = String(value);
+  if (str.length <= 8) return "***";
+  return str.slice(0, 4) + "***" + str.slice(-4);
 }
 
 async function capitalLogin() {
   const url = `${CAPITAL_BASE_URL}/api/v1/session`;
 
-  const response = await axios.post(
-    url,
-    {
-      identifier: CAPITAL_EMAIL,
-      password: CAPITAL_PASSWORD
-    },
-    {
-      headers: {
-        "X-CAP-API-KEY": CAPITAL_API_KEY,
-        "Content-Type": "application/json"
+  console.log("LOGIN REQUEST ->", url);
+  console.log("LOGIN EMAIL ->", CAPITAL_EMAIL);
+  console.log("LOGIN API KEY ->", redact(CAPITAL_API_KEY));
+
+  try {
+    const response = await axios.post(
+      url,
+      {
+        identifier: CAPITAL_EMAIL,
+        password: CAPITAL_PASSWORD
+      },
+      {
+        headers: {
+          "X-CAP-API-KEY": CAPITAL_API_KEY,
+          "Content-Type": "application/json"
+        }
       }
+    );
+
+    const cst = response.headers["cst"];
+    const securityToken = response.headers["x-security-token"];
+
+    console.log("LOGIN OK");
+    console.log("SESSION DATA:", JSON.stringify(response.data));
+
+    if (!cst || !securityToken) {
+      throw new Error("No se obtuvieron CST o X-SECURITY-TOKEN");
     }
-  );
 
-  const cst = response.headers["cst"];
-  const securityToken = response.headers["x-security-token"];
-
-  console.log("LOGIN OK");
-
-  if (!cst || !securityToken) {
-    throw new Error("No se obtuvieron CST o X-SECURITY-TOKEN");
+    return { cst, securityToken, sessionData: response.data };
+  } catch (error) {
+    console.error("LOGIN FAIL");
+    if (error.response) {
+      console.error("LOGIN STATUS:", error.response.status);
+      console.error("LOGIN DATA:", JSON.stringify(error.response.data));
+    } else {
+      console.error("LOGIN ERROR:", error.message);
+    }
+    throw error;
   }
-
-  return { cst, securityToken };
 }
 
-async function getAccountId(cst, securityToken) {
+async function getAccounts(cst, securityToken) {
   const url = `${CAPITAL_BASE_URL}/api/v1/accounts`;
 
-  const response = await axios.get(url, {
-    headers: {
-      "X-CAP-API-KEY": CAPITAL_API_KEY,
-      "CST": cst,
-      "X-SECURITY-TOKEN": securityToken,
-      "Content-Type": "application/json"
+  console.log("ACCOUNTS REQUEST ->", url);
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        "X-CAP-API-KEY": CAPITAL_API_KEY,
+        "CST": cst,
+        "X-SECURITY-TOKEN": securityToken,
+        "Content-Type": "application/json"
+      }
+    });
+
+    console.log("ACCOUNTS OK");
+    console.log("ACCOUNTS DATA:", JSON.stringify(response.data));
+
+    return response.data;
+  } catch (error) {
+    console.error("ACCOUNTS FAIL");
+    if (error.response) {
+      console.error("ACCOUNTS STATUS:", error.response.status);
+      console.error("ACCOUNTS DATA:", JSON.stringify(error.response.data));
+    } else {
+      console.error("ACCOUNTS ERROR:", error.message);
     }
-  });
+    throw error;
+  }
+}
 
-  console.log("ACCOUNTS DATA:");
-  console.log(JSON.stringify(response.data));
-
-  const accounts = response.data?.accounts || [];
+function pickAccountId(accountsData) {
+  const accounts = accountsData?.accounts || [];
   if (!accounts.length) {
     throw new Error("No se encontraron cuentas en /accounts");
   }
@@ -87,7 +123,8 @@ async function getAccountId(cst, securityToken) {
 
 async function createMarketOrder({ direction, epic, size }) {
   const { cst, securityToken } = await capitalLogin();
-  const accountId = await getAccountId(cst, securityToken);
+  const accountsData = await getAccounts(cst, securityToken);
+  const accountId = pickAccountId(accountsData);
 
   const url = `${CAPITAL_BASE_URL}/api/v1/positions`;
 
@@ -101,6 +138,9 @@ async function createMarketOrder({ direction, epic, size }) {
     forceOpen: true
   };
 
+  console.log("ORDER REQUEST ->", url);
+  console.log("ORDER PAYLOAD ->", JSON.stringify(payload));
+
   const response = await axios.post(url, payload, {
     headers: {
       "X-CAP-API-KEY": CAPITAL_API_KEY,
@@ -113,6 +153,25 @@ async function createMarketOrder({ direction, epic, size }) {
 
   return response.data;
 }
+
+// Ruta de depuración: prueba login + accounts sin TradingView
+app.get("/debug-login", async (req, res) => {
+  try {
+    const { cst, securityToken, sessionData } = await capitalLogin();
+    const accountsData = await getAccounts(cst, securityToken);
+
+    return res.json({
+      ok: true,
+      sessionData,
+      accountsData
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
 
 app.post("/webhook", async (req, res) => {
   try {
@@ -130,11 +189,7 @@ app.post("/webhook", async (req, res) => {
     let direction;
     if (actionRaw === "buy") direction = "BUY";
     else if (actionRaw === "sell") direction = "SELL";
-    else {
-      return res.status(400).json({ ok: false, error: "action debe ser buy o sell" });
-    }
-
-    await sleep(1200);
+    else return res.status(400).json({ ok: false, error: "action debe ser buy o sell" });
 
     const result = await createMarketOrder({
       direction,
@@ -164,4 +219,6 @@ app.post("/webhook", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log("Servidor activo en puerto " + PORT);
+  console.log("BASE URL:", CAPITAL_BASE_URL);
+  console.log("EPIC:", DEFAULT_EPIC);
 });
