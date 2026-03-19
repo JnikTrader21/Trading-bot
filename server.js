@@ -39,7 +39,8 @@ async function capitalLogin() {
       url,
       {
         identifier: CAPITAL_EMAIL,
-        password: CAPITAL_PASSWORD
+        password: CAPITAL_PASSWORD,
+        encryptedPassword: false
       },
       {
         headers: {
@@ -154,7 +155,6 @@ async function createMarketOrder({ direction, epic, size }) {
   return response.data;
 }
 
-// Ruta de depuración: prueba login + accounts sin TradingView
 app.get("/debug-login", async (req, res) => {
   try {
     const { cst, securityToken, sessionData } = await capitalLogin();
